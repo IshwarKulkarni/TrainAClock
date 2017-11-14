@@ -5,11 +5,47 @@ import scipy.ndimage
 import tensorflow as tf
 import time
 
+class ClockMaker:
+
+    def __init__(self, hrImgin, mnImgin):
+        assert hrImgin.shape == mnImgin.shape, "Image size mismatch in hrImg ang mnImg"
+
+        self.hrImg = hrImgin / 255
+        self.mnImg = np.zeros([12, mnImgin.shape[0], mnImgin.shape[1]])
+        for i in range(12):
+            self.mnImg[i] = scipy.ndimage.interpolation.rotate(mnImgin, -i*30, reshape=False) / 255
+
+
+    def makeClock(self, hr, mn):
+        mn = int(mn/5) # multiples of 5 only
+        return self.mnImg[mn] + scipy.ndimage.interpolation.rotate(self.hrImg, -hr*30.0 - mn/2.0,reshape=False)
+        
+    def makeClockBatch(self, batchSize):
+        
+        batch = np.empty([batchSize, self.hrImg.shape[0], self.hrImg.shape[1]])
+        hrs = np.zeros([batchSize, 12])
+        mns = np.zeros([batchSize, 12])
+        
+        for i in range(batchSize):
+            hour = np.random.randint(0,12)
+            mins = np.random.randint(0,12)
+            hrs[i][hour] = 1
+            mns[i][mins] = 1
+            batch[i] = self.makeClock(hour, mins * 5)
+            
+        return batch, hrs, mns    
+    
+    def show(self, hr, mn):
+        clockFace = self.makeClock(hr,mn)
+        cv2.imshow( "%02d:%02d"%(hr,mn), clockFace)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
 def main():
 
-    hrImg = 255 - cv2.cvtColor(cv2.imread('./hour.png') ,  cv2.COLOR_RGB2GRAY )
-    mnImg = 255 - cv2.cvtColor(cv2.imread('./minute.png'), cv2.COLOR_RGB2GRAY )
-    
+    clockMaker = ClockMaker(255 - cv2.cvtColor(cv2.imread('./hour.png') , cv2.COLOR_RGB2GRAY ), \
+                            255 - cv2.cvtColor(cv2.imread('./minute.png'), cv2.COLOR_RGB2GRAY ), )
+
     x = tf.placeholder(tf.float32, [None, 128, 128], name ='inputImg')
 
     x_image = tf.reshape(x, [-1,128,128,1])
@@ -38,91 +74,65 @@ def main():
     train_step = tf.train.AdamOptimizer(1e-3).minimize(tf.reduce_mean(total_out))
     
     sess.run(tf.global_variables_initializer())    
-    
-    imgBatch, unaryHr, unaryMn = makeClockBatch(5, hrImg, mnImg)
-    
-    np.set_printoptions(threshold=np.nan) 
-   
-    
+
     def inference(batchSize = 10, printClocks = False):
         numRight = 0
+        rmsTickError = 0 
         for t in range(batchSize):
             hr = np.random.randint(0,12)
             mn = np.random.randint(0,12) * 5
-            
-            testClock = [makeClock(hr, mn, hrImg, mnImg)]
+            testClock = [clockMaker.makeClock(hr, mn)]
             
             outHr = np.argmax(sess.run(fc_out_hr, feed_dict={x:testClock}))
-            outMn = np.argmax(sess.run(fc_out_mn, feed_dict={x:testClock}))
-            outMn *= 5 
+            outMn = np.argmax(sess.run(fc_out_mn, feed_dict={x:testClock})) * 5
             
             if(printClocks):
                 print ("Is it %02d:%02d? - %02d:%02d"%(hr,mn, outHr, outMn))
    
             if (hr == outHr and mn == outMn):
                 numRight += 1
+
+            rmsTickError += pow( (hr - outHr)*(hr - outHr) + (mn - outMn)*(mn - outMn) , 0.5)
     
-        return numRight
+        return numRight/batchSize, rmsTickError/batchSize
 
     batchSize = 32
-    numBatches= 25
-    numEpochs = 5
+    numBatches= 20
+    numEpochs = 10
 
     for e in range(numEpochs):
         startTime = time.clock()
         for b in range(numBatches):
-            imgBatch, unaryHr, unaryMn = makeClockBatch(batchSize, hrImg, mnImg)
+            imgBatch, unaryHr, unaryMn = clockMaker.makeClockBatch(batchSize)
             train_step.run(feed_dict={x: imgBatch, y_hr: unaryHr, y_mn: unaryMn})
         
-        imgBatch, unaryHr, unaryMn = makeClockBatch(10, hrImg, mnImg)
         epochTime = time.clock()-startTime
-        trainAccuracy = inference(20);
-        print("epoch %02d, training accuracy %g%%:\t%gs" %(e, 100*trainAccuracy/20, epochTime))
-        if( trainAccuracy > 0.9 and e > 3):
+        numTestImages = 8
+        trainAccuracy, rmsTickError = inference(numTestImages)
+        print("epoch %02d, training accuracy: %2g%%\t| Ticks RMS Error: %2g -\t%2gs" %(e, trainAccuracy*100 , rmsTickError, epochTime))
+        if( trainAccuracy > .9 and e > 3):
             break
 
-    print("running inference, Correct predictions: ", inference(10, True))
+    print("\nRunning inference")
+
+    acc, tickRms = inference(10, True)
+    print("inference, Correct predictions: ", acc*100, "% - tick error: ", tickRms )
 
     sess.close()    
     
 def weight_variable(shape):
-  initial = tf.truncated_normal(shape, stddev=0.05, mean=0.1)
-  return tf.Variable(initial)
+    initial = tf.truncated_normal(shape, stddev=0.05, mean=0.1)
+    return tf.Variable(initial)
 
 def bias_variable(shape):
-  initial = tf.constant(0.1, shape=shape)
-  return tf.Variable(initial)
+    initial = tf.constant(0.1, shape=shape)
+    return tf.Variable(initial)
 
 def conv2d(x, W, stride=1):
-  return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME', use_cudnn_on_gpu=True)
+    return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME', use_cudnn_on_gpu=True)
 
 def max_pool_2x2(x, ):
-  return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
-  
-
-def makeClock(hr, mn, hrImg, mnImg):
-    rot = scipy.ndimage.interpolation.rotate(mnImg, -mn*6, reshape=False)
-    rot +=  scipy.ndimage.interpolation.rotate(hrImg, -(hr*30.0 + mn/2.0), reshape=False)
-    rot = rot / 255
-    return rot
-
-def makeClockBatch(batchSize, hrImg, mnImg):
-    
-    assert hrImg.shape == mnImg.shape, "Image size mismatch in hrImg ang mnImg"
-    batch = np.empty([batchSize, hrImg.shape[0], hrImg.shape[1]])
-    hrs = np.zeros([batchSize, 12])
-    mns = np.zeros([batchSize, 12])
-    
-    for i in range(batchSize):
-        hour = np.random.randint(0,12) # because 0 == 12 on clock.
-        mins = np.random.randint(0,12)
-        #print("time:%02d:%02d"%(hour,mins))
-        hrs[i][hour] = 1
-        mns[i][mins] = 1
-        batch[i] = makeClock(hour, mins*5, hrImg, mnImg)
-        
-    return batch, hrs, mns
-
+    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
 
 if __name__== "__main__":
    main()
