@@ -4,6 +4,8 @@ import numpy as np
 import scipy.ndimage
 import tensorflow as tf
 import time
+import functools
+from operator import mul
 
 class ClockMaker:
 
@@ -41,30 +43,57 @@ class ClockMaker:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
+
+class TFNodeMaker:
+    def __init__(self):
+        self.totalWieghts  = 0 ;
+
+    def weight_variable(self, shape):
+        initial = tf.truncated_normal(shape, stddev=0.05, mean=0.1)
+        self.totalWieghts += functools.reduce(mul, shape, 1)
+        return tf.Variable(initial)
+
+    def bias_variable(self, shape):
+        initial = tf.constant(0.1, shape=shape)
+        self.totalWieghts += functools.reduce(mul, shape, 1)
+        return tf.Variable(initial)
+
+    def conv2d(self, x, W, stride=1):
+        return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME', use_cudnn_on_gpu=True)
+
+    def max_pool_2x2(self, x):
+        return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+    
+
 def main():
 
     clockMaker = ClockMaker(255 - cv2.cvtColor(cv2.imread('./hour.png') , cv2.COLOR_RGB2GRAY ), \
                             255 - cv2.cvtColor(cv2.imread('./minute.png'), cv2.COLOR_RGB2GRAY ), )
 
+    tfnm = TFNodeMaker();
+
     x = tf.placeholder(tf.float32, [None, 128, 128], name ='inputImg')
 
     x_image = tf.reshape(x, [-1,128,128,1])
     
-    h_conv1 = tf.nn.relu(conv2d(x_image, weight_variable([5, 5, 1, 8])) + bias_variable([8]), name='conv1') # 128x128x8
-    h_pool1 = max_pool_2x2(h_conv1)     # 64x64x8
+    h_conv1 = tf.nn.relu(tfnm.conv2d(x_image, tfnm.weight_variable([5, 5, 1, 3])) + tfnm.bias_variable([3]), name='conv1')
+    h_pool1 = tfnm.max_pool_2x2(h_conv1)
     
-    h_conv2 = tf.nn.relu(conv2d(h_pool1, weight_variable([5, 5, 8, 16])) + bias_variable([16]), name='conv2') # 64x64x16
-    h_pool2 = max_pool_2x2(h_conv2)  # 32x32x16
+    h_conv2 = tf.nn.relu(tfnm.conv2d(h_pool1, tfnm.weight_variable([5, 5, 3, 6])) + tfnm.bias_variable([6]), name='conv2')
+    h_pool2 = tfnm.max_pool_2x2(h_conv2)
 
-    h_pool2_flat = tf.reshape(h_pool2, [-1, 32*32*16])
+    h_pool2_flat = tf.reshape(h_pool2, [-1, 32*32*6])
     
-    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, weight_variable([32* 32 * 16, 128])) + bias_variable([128]), name='FC1')
+    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, tfnm.weight_variable([32* 32 * 6, 64])) + tfnm.bias_variable([64]), name='FC1')
     
-    fc_out_hr = tf.nn.relu( tf.matmul(h_fc1, weight_variable([128, 12])) + bias_variable([12]), name='FC2Hr')
-    fc_out_mn = tf.nn.relu( tf.matmul(h_fc1, weight_variable([128, 12])) + bias_variable([12]), name='FC2Mn')
+    fc_out_hr = tf.nn.relu( tf.matmul(h_fc1, tfnm.weight_variable([64, 12])) + tfnm.bias_variable([12]), name='FC2Hr')
+    fc_out_mn = tf.nn.relu( tf.matmul(h_fc1, tfnm.weight_variable([64, 12])) + tfnm.bias_variable([12]), name='FC2Mn')
 
     y_hr = tf.placeholder(tf.float32, [None, 12], name='y_hr')
     y_mn = tf.placeholder(tf.float32, [None, 12], name='y_mn')
+
+
+    print ("***Total weights: ", tfnm.totalWieghts, "***" )
         
     sess = tf.InteractiveSession()
     
@@ -119,20 +148,7 @@ def main():
     print("inference, Correct predictions: ", acc*100, "% - tick error: ", tickRms )
 
     sess.close()    
-    
-def weight_variable(shape):
-    initial = tf.truncated_normal(shape, stddev=0.05, mean=0.1)
-    return tf.Variable(initial)
 
-def bias_variable(shape):
-    initial = tf.constant(0.1, shape=shape)
-    return tf.Variable(initial)
-
-def conv2d(x, W, stride=1):
-    return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME', use_cudnn_on_gpu=True)
-
-def max_pool_2x2(x, ):
-    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
 
 if __name__== "__main__":
    main()
