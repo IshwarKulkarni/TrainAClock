@@ -84,10 +84,12 @@ def main():
 
     h_pool2_flat = tf.reshape(h_pool2, [-1, 32*32*6])
     
-    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, tfnm.weight_variable([32* 32 * 6, 64])) + tfnm.bias_variable([64]), name='FC1')
+    n_fc_out = 30
     
-    fc_out_hr = tf.nn.relu( tf.matmul(h_fc1, tfnm.weight_variable([64, 12])) + tfnm.bias_variable([12]), name='FC2Hr')
-    fc_out_mn = tf.nn.relu( tf.matmul(h_fc1, tfnm.weight_variable([64, 12])) + tfnm.bias_variable([12]), name='FC2Mn')
+    h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, tfnm.weight_variable([32* 32 * 6, n_fc_out ])) + tfnm.bias_variable([n_fc_out ]), name='FC1')
+    
+    fc_out_hr = tf.nn.relu( tf.matmul(h_fc1, tfnm.weight_variable([n_fc_out, 12])) + tfnm.bias_variable([12]), name='FC2Hr')
+    fc_out_mn = tf.nn.relu( tf.matmul(h_fc1, tfnm.weight_variable([n_fc_out, 12])) + tfnm.bias_variable([12]), name='FC2Mn')
 
     y_hr = tf.placeholder(tf.float32, [None, 12], name='y_hr')
     y_mn = tf.placeholder(tf.float32, [None, 12], name='y_mn')
